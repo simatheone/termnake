@@ -1,10 +1,15 @@
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::{Event, KeyCode, read};
+use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use std::collections::VecDeque;
 use std::io;
+use std::io::{Write, stdout};
 
 const WIDTH: u16 = 15;
 const HEIGHT: u16 = 10;
 // Проверка констант, чтобы хвост не спавнился за рамками поля
-const _: () = assert!(WIDTH >= 7 && HEIGHT >= 4, "Поле слишком маленькое");
+const _: () = assert!(WIDTH >= 6 && HEIGHT >= 3, "Поле слишком маленькое");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Direction {
@@ -131,20 +136,20 @@ struct Game {
 }
 
 fn build_field(game: &Game) -> String {
-    // Символ переноса строки "\n" - 1 байт
-    let mut game_field = String::with_capacity(((WIDTH + 1) * HEIGHT) as usize);
+    // Символ переноса строки + возврата каретки "\r\n" - 2 байт
+    let mut game_field = String::with_capacity(((WIDTH + 2) * HEIGHT) as usize);
     let head = game.snake.head();
 
     for line in 0..HEIGHT {
         if line == 0 || line == HEIGHT - 1 {
-            game_field.push('\n');
+            game_field.push_str("\r\n");
             game_field.push_str(&"#".repeat(WIDTH as usize));
             continue;
         }
 
         for col in 0..WIDTH {
             if col == 0 {
-                game_field.push_str("\n#");
+                game_field.push_str("\r\n#");
             } else if col == WIDTH - 1 {
                 game_field.push('#');
             } else {
@@ -166,12 +171,12 @@ fn build_field(game: &Game) -> String {
     game_field
 }
 
-fn parse_direction(letter: &str) -> Option<Direction> {
-    match letter {
-        "w" => Some(Direction::Up),
-        "s" => Some(Direction::Down),
-        "d" => Some(Direction::Right),
-        "a" => Some(Direction::Left),
+fn parse_direction(key: KeyCode) -> Option<Direction> {
+    match key {
+        KeyCode::Char('w') | KeyCode::Up => Some(Direction::Up),
+        KeyCode::Char('s') | KeyCode::Down => Some(Direction::Down),
+        KeyCode::Char('d') | KeyCode::Right => Some(Direction::Right),
+        KeyCode::Char('a') | KeyCode::Left => Some(Direction::Left),
         _ => None,
     }
 }
@@ -197,11 +202,11 @@ fn random_food_cell(snake: &Snake) -> Option<Point> {
     }
 }
 
-fn main() {
+fn run() -> io::Result<()> {
     let snake = Snake::new();
     let Some(food) = random_food_cell(&snake) else {
-        println!("Игра окончена");
-        return;
+        print!("\r\nИгра окончена");
+        return Ok(());
     };
 
     let mut game = Game {
@@ -209,29 +214,30 @@ fn main() {
         food,
         score: 0,
     };
-    let mut input = String::new();
-
-    println!("Как играть: w/a/s/d + Enter — ход, q — выход.");
 
     loop {
+        // Очищает экран и переводит курсор в левый верхний угол
+        execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+
+        print!("\r\nКак играть: w/a/s/d либо стрелочки — ход, q — выход.");
+
         let game_field = build_field(&game);
 
-        println!("Счет: {}", game.score);
-        println!("{}", game_field);
+        print!("\r\nСчет: {}", game.score);
+        print!("\r\n{}", game_field);
+        stdout().flush()?; // Сброс буффера для печати последний строки с границой поля
 
-        io::stdin().read_line(&mut input).expect("Can not read ");
+        let Event::Key(key) = read()? else {
+            continue;
+        };
 
-        let cmd = input.trim();
-
-        if cmd == "q" {
+        if key.code == KeyCode::Char('q') {
             break;
-        } else if let Some(direction) = parse_direction(cmd)
+        } else if let Some(direction) = parse_direction(key.code)
             && game.snake.direction.opposite() != direction
         {
             game.snake.direction = direction;
         }
-
-        input.clear();
 
         match game.snake.make_move(&game.food) {
             SnakeStatus::Alive => continue,
@@ -242,23 +248,41 @@ fn main() {
                 }
                 None => {
                     game.score += 1;
-                    println!("Победа! Змейка заполнила все клетки. Свободных клеток не осталось.");
+                    print!(
+                        "\r\nПобеда! Змейка заполнила все клетки. Свободных клеток не осталось."
+                    );
                     break;
                 }
             },
             SnakeStatus::BodyHit => {
-                println!("Змея ударилась в свое тело");
+                print!("\r\n\nЗмея ударилась в свое тело");
                 break;
             }
             SnakeStatus::WallHit => {
-                println!("Змея ударилась в стену");
+                print!("\r\n\nЗмея ударилась в стену");
                 break;
             }
         }
     }
 
-    println!(
-        "\nИгра окончена. Счет: {}.\nСпасибо за игру, всего хорошего!\n",
+    print!(
+        "\r\nИгра окончена. Счет: {}.\r\nСпасибо за игру, всего хорошего!\r\n\n",
         game.score
     );
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    execute!(stdout(), Hide)?; // Скрываем курсор на время игры
+
+    enable_raw_mode()?;
+
+    let game_result = run();
+
+    disable_raw_mode()?;
+
+    execute!(stdout(), Show)?; // Возвращаем видимость курсора
+
+    game_result
 }
