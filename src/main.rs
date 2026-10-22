@@ -1,15 +1,18 @@
 use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::poll;
 use crossterm::event::{Event, KeyCode, read};
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use std::collections::VecDeque;
 use std::io;
 use std::io::{Write, stdout};
+use std::time::{Duration, Instant};
 
 const WIDTH: u16 = 15;
 const HEIGHT: u16 = 10;
 // Проверка констант, чтобы хвост не спавнился за рамками поля
 const _: () = assert!(WIDTH >= 6 && HEIGHT >= 3, "Поле слишком маленькое");
+const TICK: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Direction {
@@ -68,6 +71,7 @@ impl Point {
 struct Snake {
     body: VecDeque<Point>,
     direction: Direction,
+    last_step: Direction,
 }
 
 impl Snake {
@@ -88,6 +92,7 @@ impl Snake {
                 },
             ]),
             direction: Direction::Right,
+            last_step: Direction::Right,
         }
     }
 
@@ -112,6 +117,7 @@ impl Snake {
         }
 
         self.body.push_front(new_head_pos);
+        self.last_step = self.direction; // Исключает разворот на 180 град. за время 1 тика
 
         if eats {
             SnakeStatus::AteFood
@@ -133,6 +139,40 @@ struct Game {
     snake: Snake,
     food: Point,
     score: u32,
+}
+
+impl Game {
+    fn new() -> Self {
+        let snake = Snake::new();
+        let food = random_food_cell(&snake)
+            .expect("Food should be able to spaw at the beginning of the game");
+
+        Game {
+            snake,
+            food,
+            score: 0,
+        }
+    }
+}
+
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn new() -> io::Result<TerminalGuard> {
+        execute!(stdout(), Hide)?; // Скрываем курсор на время игры
+        enable_raw_mode()?;
+
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        /* Деструктор, выключающий raw-режим терминала и возвращающий курсор при выходе из области видимости (main). */
+        let _ = disable_raw_mode();
+
+        let _ = execute!(stdout(), Show); // Возвращаем видимость курсора
+    }
 }
 
 fn build_field(game: &Game) -> String {
@@ -202,20 +242,10 @@ fn random_food_cell(snake: &Snake) -> Option<Point> {
     }
 }
 
-fn run() -> io::Result<()> {
-    let snake = Snake::new();
-    let Some(food) = random_food_cell(&snake) else {
-        print!("\r\nИгра окончена");
-        return Ok(());
-    };
+fn play_game() -> io::Result<()> {
+    let mut game = Game::new();
 
-    let mut game = Game {
-        snake,
-        food,
-        score: 0,
-    };
-
-    loop {
+    'game: loop {
         // Очищает экран и переводит курсор в левый верхний угол
         execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
@@ -227,16 +257,27 @@ fn run() -> io::Result<()> {
         print!("\r\n{}", game_field);
         stdout().flush()?; // Сброс буффера для печати последний строки с границой поля
 
-        let Event::Key(key) = read()? else {
-            continue;
-        };
+        let tick_start = Instant::now(); // Внутренний таймер для тика, чтобы нажатия клавишь не ускоряли змейку
 
-        if key.code == KeyCode::Char('q') {
-            break;
-        } else if let Some(direction) = parse_direction(key.code)
-            && game.snake.direction.opposite() != direction
-        {
-            game.snake.direction = direction;
+        loop {
+            let tick_elapsed = TICK.saturating_sub(tick_start.elapsed());
+            if tick_elapsed == Duration::ZERO {
+                break;
+            }
+
+            if poll(tick_elapsed)? {
+                let Event::Key(key) = read()? else {
+                    continue;
+                };
+
+                if key.code == KeyCode::Char('q') {
+                    break 'game;
+                } else if let Some(direction) = parse_direction(key.code)
+                    && game.snake.last_step.opposite() != direction
+                {
+                    game.snake.direction = direction;
+                }
+            }
         }
 
         match game.snake.make_move(&game.food) {
@@ -251,16 +292,16 @@ fn run() -> io::Result<()> {
                     print!(
                         "\r\nПобеда! Змейка заполнила все клетки. Свободных клеток не осталось."
                     );
-                    break;
+                    break 'game;
                 }
             },
             SnakeStatus::BodyHit => {
                 print!("\r\n\nЗмея ударилась в свое тело");
-                break;
+                break 'game;
             }
             SnakeStatus::WallHit => {
                 print!("\r\n\nЗмея ударилась в стену");
-                break;
+                break 'game;
             }
         }
     }
@@ -274,15 +315,8 @@ fn run() -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    execute!(stdout(), Hide)?; // Скрываем курсор на время игры
+    /* Guard  защищает терминал от поломки игры (в случае panic или except) в raw режиме терминала. */
+    let _guard = TerminalGuard::new()?;
 
-    enable_raw_mode()?;
-
-    let game_result = run();
-
-    disable_raw_mode()?;
-
-    execute!(stdout(), Show)?; // Возвращаем видимость курсора
-
-    game_result
+    play_game()
 }
