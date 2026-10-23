@@ -2,7 +2,9 @@ use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::poll;
 use crossterm::event::{Event, KeyCode, read};
 use crossterm::execute;
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use std::collections::VecDeque;
 use std::io;
 use std::io::{Write, stdout};
@@ -168,20 +170,23 @@ impl Game {
 struct TerminalGuard;
 
 impl TerminalGuard {
+    /// Конструктор, включающий альтернативный экран, raw-режим терминала и скрывающий курсор
     fn new() -> io::Result<TerminalGuard> {
-        execute!(stdout(), Hide)?; // Скрываем курсор на время игры
         enable_raw_mode()?;
+        execute!(stdout(), Hide)?; // Скрываем курсор на время игры
+        execute!(stdout(), EnterAlternateScreen)?;
 
         Ok(Self)
     }
 }
 
 impl Drop for TerminalGuard {
-    /// Деструктор, выключающий raw-режим терминала и возвращающий курсор при выходе из области видимости (main).
+    /// Деструктор, выключающий альтернативный экран, raw-режим терминала и возвращающий курсор при выходе из
+    /// области видимости
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-
+        let _ = execute!(stdout(), LeaveAlternateScreen);
         let _ = execute!(stdout(), Show); // Возвращаем видимость курсора
+        let _ = disable_raw_mode();
     }
 }
 
@@ -252,7 +257,7 @@ fn random_food_cell(snake: &Snake) -> Option<Point> {
     }
 }
 
-fn play_game() -> io::Result<()> {
+fn play_game() -> io::Result<u32> {
     let mut game = Game::new();
 
     'game: loop {
@@ -322,7 +327,7 @@ fn play_game() -> io::Result<()> {
         game.score
     );
 
-    Ok(())
+    Ok(game.score)
 }
 
 fn ask_restart() -> io::Result<bool> {
@@ -344,21 +349,30 @@ fn ask_restart() -> io::Result<bool> {
     }
 }
 
-fn game_cycle() -> io::Result<()> {
+fn game_cycle() -> io::Result<u32> {
     loop {
-        play_game()?;
+        let game_score = play_game()?;
 
         let has_restart_game = ask_restart()?;
 
         if !has_restart_game {
-            break Ok(());
+            break Ok(game_score);
         }
     }
 }
 
 fn main() -> io::Result<()> {
     // Guard  защищает терминал от поломки игры (в случае panic или except) в raw режиме терминала
-    let _guard = TerminalGuard::new()?;
+    let guard = TerminalGuard::new()?;
 
-    game_cycle()
+    let game_score = game_cycle();
+
+    drop(guard);
+
+    println!(
+        "\nИгра окончена. Счет: {}.\r\nСпасибо за игру, всего хорошего!\r\n\n",
+        game_score?
+    );
+
+    Ok(())
 }
