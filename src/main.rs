@@ -145,7 +145,7 @@ impl Game {
     fn new() -> Self {
         let snake = Snake::new();
         let food = random_food_cell(&snake)
-            .expect("Food should be able to spaw at the beginning of the game");
+            .expect("Food should be able to spawn at the beginning of the game");
 
         Game {
             snake,
@@ -314,9 +314,39 @@ fn play_game() -> io::Result<()> {
     Ok(())
 }
 
+fn ask_restart() -> io::Result<bool> {
+    print!("\r\nr - для перезапуска игры; q - для выхода из игры");
+
+    stdout().flush()?;
+
+    loop {
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+
+        if key.code == KeyCode::Char('q') {
+            break Ok(false);
+        } else if key.code == KeyCode::Char('r') {
+            break Ok(true);
+        }
+    }
+}
+
+fn game_cycle() -> io::Result<()> {
+    loop {
+        play_game()?;
+
+        let has_restart_game = ask_restart()?;
+
+        if !has_restart_game {
+            break Ok(());
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
     /* Guard  защищает терминал от поломки игры (в случае panic или except) в raw режиме терминала. */
     let _guard = TerminalGuard::new()?;
 
-    play_game()
+    game_cycle()
 }
