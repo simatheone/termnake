@@ -12,7 +12,9 @@ const WIDTH: u16 = 15;
 const HEIGHT: u16 = 10;
 // Проверка констант, чтобы хвост не спавнился за рамками поля
 const _: () = assert!(WIDTH >= 6 && HEIGHT >= 3, "Поле слишком маленькое");
-const TICK: Duration = Duration::from_millis(200);
+const START_TICK: Duration = Duration::from_millis(200);
+const MIN_TICK: Duration = Duration::from_millis(70);
+const SPEEDUP_PER_FOOD: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Direction {
@@ -153,6 +155,14 @@ impl Game {
             score: 0,
         }
     }
+
+    /// Тик игры с учётом счёта, но не меньше MIN_TICK.
+    fn tick(&self) -> Duration {
+        let speedup = Duration::from_millis(u64::from(self.score) * SPEEDUP_PER_FOOD);
+        let new_tick = START_TICK.saturating_sub(speedup);
+
+        new_tick.max(MIN_TICK)
+    }
 }
 
 struct TerminalGuard;
@@ -167,8 +177,8 @@ impl TerminalGuard {
 }
 
 impl Drop for TerminalGuard {
+    /// Деструктор, выключающий raw-режим терминала и возвращающий курсор при выходе из области видимости (main).
     fn drop(&mut self) {
-        /* Деструктор, выключающий raw-режим терминала и возвращающий курсор при выходе из области видимости (main). */
         let _ = disable_raw_mode();
 
         let _ = execute!(stdout(), Show); // Возвращаем видимость курсора
@@ -249,7 +259,7 @@ fn play_game() -> io::Result<()> {
         // Очищает экран и переводит курсор в левый верхний угол
         execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
-        print!("\r\nКак играть: w/a/s/d либо стрелочки — ход, q — выход.");
+        print!("\r\nКак играть: w/a/s/d либо ↑/←/↓/→ — ход, q — выход.");
 
         let game_field = build_field(&game);
 
@@ -258,9 +268,10 @@ fn play_game() -> io::Result<()> {
         stdout().flush()?; // Сброс буффера для печати последний строки с границой поля
 
         let tick_start = Instant::now(); // Внутренний таймер для тика, чтобы нажатия клавишь не ускоряли змейку
+        let game_tick = game.tick();
 
         loop {
-            let tick_elapsed = TICK.saturating_sub(tick_start.elapsed());
+            let tick_elapsed = game_tick.saturating_sub(tick_start.elapsed());
             if tick_elapsed == Duration::ZERO {
                 break;
             }
@@ -324,10 +335,11 @@ fn ask_restart() -> io::Result<bool> {
             continue;
         };
 
-        if key.code == KeyCode::Char('q') {
-            break Ok(false);
-        } else if key.code == KeyCode::Char('r') {
-            break Ok(true);
+        match key.code {
+            KeyCode::Char('r') => break Ok(true),
+            KeyCode::Char('q') => break Ok(false),
+            KeyCode::Esc => break Ok(false),
+            _ => (),
         }
     }
 }
@@ -345,7 +357,7 @@ fn game_cycle() -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    /* Guard  защищает терминал от поломки игры (в случае panic или except) в raw режиме терминала. */
+    // Guard  защищает терминал от поломки игры (в случае panic или except) в raw режиме терминала
     let _guard = TerminalGuard::new()?;
 
     game_cycle()
