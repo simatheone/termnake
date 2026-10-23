@@ -1,6 +1,6 @@
 use crossterm::cursor::MoveTo;
 use crossterm::event::poll;
-use crossterm::event::{Event, KeyCode, read};
+use crossterm::event::{Event, KeyCode, KeyEventKind, read};
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 use std::io;
@@ -145,6 +145,11 @@ fn play_game() -> io::Result<u32> {
                     continue;
                 };
 
+                // Обработка для Windows, где нажатие считается как 2 команды: Press, Release (На MacOS только Press)
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
                 if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
                     break 'game;
                 } else if let Some(direction) = parse_direction(key.code)
@@ -198,6 +203,11 @@ fn ask_restart() -> io::Result<bool> {
         let Event::Key(key) = read()? else {
             continue;
         };
+
+        // Обработка для Windows, где нажатие считается как 2 команды: Press, Release (На MacOS только Press)
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
 
         match key.code {
             KeyCode::Char('r') => break Ok(true),
