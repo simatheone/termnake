@@ -1,143 +1,25 @@
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::MoveTo;
 use crossterm::event::poll;
 use crossterm::event::{Event, KeyCode, read};
 use crossterm::execute;
-use crossterm::terminal::{
-    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use std::collections::VecDeque;
+use crossterm::terminal::{Clear, ClearType};
 use std::io;
 use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
-const WIDTH: u16 = 15;
-const HEIGHT: u16 = 10;
+use crate::config::{HEIGHT, WIDTH};
+use crate::snake::{Direction, Point, Snake, SnakeStatus};
+use crate::terminal::TerminalGuard;
+
 // Проверка констант, чтобы хвост не спавнился за рамками поля
 const _: () = assert!(WIDTH >= 6 && HEIGHT >= 3, "Поле слишком маленькое");
 const START_TICK: Duration = Duration::from_millis(200);
 const MIN_TICK: Duration = Duration::from_millis(70);
 const SPEEDUP_PER_FOOD: u64 = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Direction {
-    Up,
-    Down,
-    Left,
-    Right,
-}
-
-impl Direction {
-    fn opposite(self) -> Direction {
-        match self {
-            Direction::Up => Direction::Down,
-            Direction::Down => Direction::Up,
-            Direction::Right => Direction::Left,
-            Direction::Left => Direction::Right,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Point {
-    x: u16,
-    y: u16,
-}
-
-impl Point {
-    #[must_use]
-    fn step(self, direction: Direction) -> Point {
-        match direction {
-            Direction::Up => Point {
-                y: self.y - 1,
-                ..self
-            },
-            Direction::Down => Point {
-                y: self.y + 1,
-                ..self
-            },
-
-            Direction::Left => Point {
-                x: self.x - 1,
-                ..self
-            },
-            Direction::Right => Point {
-                x: self.x + 1,
-                ..self
-            },
-        }
-    }
-
-    fn is_wall(self) -> bool {
-        self.y == 0 || self.y == HEIGHT - 1 || self.x == 0 || self.x == WIDTH - 1
-    }
-}
-
-struct Snake {
-    body: VecDeque<Point>,
-    direction: Direction,
-    last_step: Direction,
-}
-
-impl Snake {
-    fn new() -> Self {
-        Snake {
-            body: VecDeque::from([
-                Point {
-                    x: WIDTH / 2,
-                    y: HEIGHT / 2,
-                },
-                Point {
-                    x: WIDTH / 2 - 1,
-                    y: HEIGHT / 2,
-                },
-                Point {
-                    x: WIDTH / 2 - 2,
-                    y: HEIGHT / 2,
-                },
-            ]),
-            direction: Direction::Right,
-            last_step: Direction::Right,
-        }
-    }
-
-    fn head(&self) -> &Point {
-        self.body.front().expect("Snake should have a head")
-    }
-
-    fn make_move(&mut self, food: &Point) -> SnakeStatus {
-        let new_head_pos: Point = self.head().step(self.direction);
-        let eats = new_head_pos == *food;
-
-        if new_head_pos.is_wall() {
-            return SnakeStatus::WallHit;
-        }
-
-        if !eats {
-            self.body.pop_back();
-        }
-
-        if self.body.contains(&new_head_pos) {
-            return SnakeStatus::BodyHit;
-        }
-
-        self.body.push_front(new_head_pos);
-        self.last_step = self.direction; // Исключает разворот на 180 град. за время 1 тика
-
-        if eats {
-            SnakeStatus::AteFood
-        } else {
-            SnakeStatus::Alive
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum SnakeStatus {
-    Alive,
-    AteFood,
-    BodyHit,
-    WallHit,
-}
+mod config;
+mod snake;
+mod terminal;
 
 struct Game {
     snake: Snake,
@@ -167,29 +49,6 @@ impl Game {
     }
 }
 
-struct TerminalGuard;
-
-impl TerminalGuard {
-    /// Конструктор, включающий альтернативный экран, raw-режим терминала и скрывающий курсор
-    fn new() -> io::Result<TerminalGuard> {
-        enable_raw_mode()?;
-        execute!(stdout(), Hide)?; // Скрываем курсор на время игры
-        execute!(stdout(), EnterAlternateScreen)?;
-
-        Ok(Self)
-    }
-}
-
-impl Drop for TerminalGuard {
-    /// Деструктор, выключающий альтернативный экран, raw-режим терминала и возвращающий курсор при выходе из
-    /// области видимости
-    fn drop(&mut self) {
-        let _ = execute!(stdout(), LeaveAlternateScreen);
-        let _ = execute!(stdout(), Show); // Возвращаем видимость курсора
-        let _ = disable_raw_mode();
-    }
-}
-
 fn build_field(game: &Game) -> String {
     // Символ переноса строки + возврата каретки "\r\n" - 2 байт
     let mut game_field = String::with_capacity(((WIDTH + 2) * HEIGHT) as usize);
@@ -212,7 +71,7 @@ fn build_field(game: &Game) -> String {
 
                 if curr_point == *head {
                     game_field.push('@');
-                } else if game.snake.body.contains(&curr_point) {
+                } else if game.snake.contains(&curr_point) {
                     game_field.push('o');
                 } else if curr_point == game.food {
                     game_field.push('*')
@@ -237,7 +96,7 @@ fn parse_direction(key: KeyCode) -> Option<Direction> {
 }
 
 fn has_free_cells(snake: &Snake) -> bool {
-    (WIDTH as usize - 2) * (HEIGHT as usize - 2) > snake.body.len()
+    (WIDTH as usize - 2) * (HEIGHT as usize - 2) > snake.len()
 }
 
 fn random_food_cell(snake: &Snake) -> Option<Point> {
@@ -251,7 +110,7 @@ fn random_food_cell(snake: &Snake) -> Option<Point> {
             y: rand::random_range(1..HEIGHT - 1),
         };
 
-        if !snake.body.contains(&food_point) {
+        if !snake.contains(&food_point) {
             return Some(food_point);
         }
     }
@@ -264,7 +123,7 @@ fn play_game() -> io::Result<u32> {
         // Очищает экран и переводит курсор в левый верхний угол
         execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
-        print!("\r\nКак играть: w/a/s/d либо ↑/←/↓/→ — ход, q — выход.");
+        print!("\r\nКак играть: w/a/s/d либо ↑/←/↓/→ — ход, Esc/q — выход.");
 
         let game_field = build_field(&game);
 
@@ -286,7 +145,7 @@ fn play_game() -> io::Result<u32> {
                     continue;
                 };
 
-                if key.code == KeyCode::Char('q') {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
                     break 'game;
                 } else if let Some(direction) = parse_direction(key.code)
                     && game.snake.last_step.opposite() != direction
@@ -331,7 +190,7 @@ fn play_game() -> io::Result<u32> {
 }
 
 fn ask_restart() -> io::Result<bool> {
-    print!("\r\nr - для перезапуска игры; q - для выхода из игры");
+    print!("\r\nr - для перезапуска игры; Esc/q - для выхода из игры");
 
     stdout().flush()?;
 
@@ -375,89 +234,4 @@ fn main() -> io::Result<()> {
     );
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_opposite() {
-        let direction_up = Direction::Up;
-        let direction_down = Direction::Down;
-        let direction_left = Direction::Left;
-        let direction_right = Direction::Right;
-
-        assert_eq!(direction_up.opposite(), Direction::Down);
-        assert_eq!(direction_down.opposite(), Direction::Up);
-        assert_eq!(direction_left.opposite(), Direction::Right);
-        assert_eq!(direction_right.opposite(), Direction::Left);
-    }
-
-    #[test]
-    fn test_snake_does_not_grow_without_food_hit() {
-        let mut snake = Snake::new();
-        let initial_snake_len = snake.body.len();
-
-        let food = Point { x: 1, y: 1 };
-
-        snake.make_move(&food);
-
-        assert_eq!(initial_snake_len, snake.body.len())
-    }
-
-    #[test]
-    fn test_snake_grows_on_food_hit() {
-        let mut snake = Snake::new();
-        let initial_snake_len = snake.body.len();
-
-        let food = Point {
-            x: WIDTH / 2 + 1,
-            y: HEIGHT / 2,
-        };
-
-        let snake_status = snake.make_move(&food);
-
-        assert_eq!(initial_snake_len + 1, snake.body.len());
-        assert_eq!(snake_status, SnakeStatus::AteFood);
-    }
-
-    #[test]
-    fn test_four_length_snake_cant_hit_itself() {
-        let mut snake: Snake = Snake {
-            body: VecDeque::from([
-                Point { x: 5, y: 5 },
-                Point { x: 6, y: 5 },
-                Point { x: 6, y: 4 },
-                Point { x: 5, y: 4 },
-            ]),
-            direction: Direction::Up,
-            last_step: Direction::Left,
-        };
-        let food = Point { x: 1, y: 1 };
-
-        let tail_position: Point = *snake.body.back().unwrap();
-        let snake_status = snake.make_move(&food);
-
-        assert_eq!(snake_status, SnakeStatus::Alive);
-        assert_eq!(snake.head(), &tail_position);
-    }
-
-    #[test]
-    fn test_snake_wall_hit_return_wallhit_status() {
-        let mut snake: Snake = Snake {
-            body: VecDeque::from([
-                Point { x: 13, y: 1 },
-                Point { x: 12, y: 1 },
-                Point { x: 11, y: 1 },
-            ]),
-            direction: Direction::Right,
-            last_step: Direction::Right,
-        };
-        let food = Point { x: 1, y: 1 };
-
-        let snake_status = snake.make_move(&food);
-
-        assert_eq!(snake_status, SnakeStatus::WallHit);
-    }
 }
