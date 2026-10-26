@@ -2,6 +2,7 @@ use crossterm::cursor::MoveTo;
 use crossterm::event::poll;
 use crossterm::event::{Event, KeyCode, KeyEventKind, read};
 use crossterm::execute;
+use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType};
 use std::io;
 use std::io::{Write, stdout};
@@ -25,6 +26,7 @@ struct Game {
     snake: Snake,
     food: Point,
     score: u32,
+    paused: bool,
 }
 
 impl Game {
@@ -37,6 +39,7 @@ impl Game {
             snake,
             food,
             score: 0,
+            paused: false,
         }
     }
 
@@ -50,33 +53,34 @@ impl Game {
 }
 
 fn build_field(game: &Game) -> String {
-    // Символ переноса строки + возврата каретки "\r\n" - 2 байт
-    let mut game_field = String::with_capacity(((WIDTH + 2) * HEIGHT) as usize);
+    // Символ переноса строки + возврата каретки "\r\n" - 2 байт, 16 байт - стилизованная цветом клетка
+    let mut game_field = String::with_capacity((16 * (WIDTH + 2) * HEIGHT) as usize);
     let head = game.snake.head();
 
     for line in 0..HEIGHT {
         if line == 0 || line == HEIGHT - 1 {
             game_field.push_str("\r\n");
-            game_field.push_str(&"#".repeat(WIDTH as usize));
+            game_field.push_str(&"#".repeat(WIDTH as usize).red().to_string());
             continue;
         }
 
         for col in 0..WIDTH {
             if col == 0 {
                 game_field.push_str("\r\n#");
+                game_field.push_str(&"#".red().to_string());
             } else if col == WIDTH - 1 {
-                game_field.push('#');
+                game_field.push_str(&'#'.red().to_string());
             } else {
                 let curr_point = Point { y: line, x: col };
 
                 if curr_point == *head {
-                    game_field.push('@');
+                    game_field.push_str(&'@'.magenta().to_string());
                 } else if game.snake.contains(&curr_point) {
-                    game_field.push('o');
+                    game_field.push_str(&'o'.cyan().to_string());
                 } else if curr_point == game.food {
-                    game_field.push('*')
+                    game_field.push_str(&'*'.green().to_string())
                 } else {
-                    game_field.push('.');
+                    game_field.push_str(&'.'.grey().to_string());
                 }
             }
         }
@@ -123,12 +127,16 @@ fn play_game() -> io::Result<u32> {
         // Очищает экран и переводит курсор в левый верхний угол
         execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
-        print!("\r\nКак играть: w/a/s/d либо ↑/←/↓/→ — ход, Esc/q — выход.");
+        print!("\r\nКак играть: w/a/s/d либо ↑/←/↓/→ — ход, пробел - пауза, Esc/q — выход.");
 
         let game_field = build_field(&game);
 
         print!("\r\nСчет: {}", game.score);
         print!("\r\n{}", game_field);
+
+        if game.paused {
+            print!("\r\n\nПАУЗА - нажмите Пробел, чтобы продолжить.");
+        }
         stdout().flush()?; // Сброс буффера для печати последний строки с границой поля
 
         let tick_start = Instant::now(); // Внутренний таймер для тика, чтобы нажатия клавишь не ускоряли змейку
@@ -150,14 +158,27 @@ fn play_game() -> io::Result<u32> {
                     continue;
                 }
 
+                if key.code == KeyCode::Char(' ') {
+                    game.paused = !game.paused;
+
+                    if game.paused {
+                        break;
+                    }
+                }
+
                 if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
                     break 'game;
                 } else if let Some(direction) = parse_direction(key.code)
                     && game.snake.last_step.opposite() != direction
+                    && !game.paused
                 {
                     game.snake.direction = direction;
                 }
             }
+        }
+
+        if game.paused {
+            continue;
         }
 
         match game.snake.make_move(&game.food) {
