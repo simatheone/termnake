@@ -4,33 +4,33 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, read};
 use crossterm::execute;
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType};
-use std::io;
-use std::io::{Write, stdout};
+use std::io::{self, Write, stdout};
 use std::time::{Duration, Instant};
 
 use crate::config::{HEIGHT, WIDTH};
+use crate::menu::{Difficulty, menu};
 use crate::snake::{Direction, Point, Snake, SnakeStatus};
 use crate::terminal::TerminalGuard;
 
 // Проверка констант, чтобы хвост не спавнился за рамками поля
 const _: () = assert!(WIDTH >= 6 && HEIGHT >= 3, "Поле слишком маленькое");
-const START_TICK: Duration = Duration::from_millis(200);
-const MIN_TICK: Duration = Duration::from_millis(70);
 const SPEEDUP_PER_FOOD: u64 = 10;
 
 mod config;
+mod menu;
 mod snake;
 mod terminal;
 
 struct Game {
     snake: Snake,
     food: Point,
+    difficulty: Difficulty,
     score: u32,
     paused: bool,
 }
 
 impl Game {
-    fn new() -> Self {
+    fn new(difficulty: Difficulty) -> Self {
         let snake = Snake::new();
         let food = random_food_cell(&snake)
             .expect("Food should be able to spawn at the beginning of the game");
@@ -38,17 +38,19 @@ impl Game {
         Game {
             snake,
             food,
+            difficulty,
             score: 0,
             paused: false,
         }
     }
 
-    /// Тик игры с учётом счёта, но не меньше MIN_TICK.
+    /// Тик игры с учётом счёта, но не меньше min_tick выбранной сложности.
     fn tick(&self) -> Duration {
+        let tick_range = self.difficulty.tick_range();
         let speedup = Duration::from_millis(u64::from(self.score) * SPEEDUP_PER_FOOD);
-        let new_tick = START_TICK.saturating_sub(speedup);
+        let new_tick = tick_range.start_tick.saturating_sub(speedup);
 
-        new_tick.max(MIN_TICK)
+        new_tick.max(tick_range.min_tick)
     }
 }
 
@@ -66,7 +68,7 @@ fn build_field(game: &Game) -> String {
 
         for col in 0..WIDTH {
             if col == 0 {
-                game_field.push_str("\r\n#");
+                game_field.push_str("\r\n");
                 game_field.push_str(&"#".red().to_string());
             } else if col == WIDTH - 1 {
                 game_field.push_str(&'#'.red().to_string());
@@ -120,8 +122,8 @@ fn random_food_cell(snake: &Snake) -> Option<Point> {
     }
 }
 
-fn play_game() -> io::Result<u32> {
-    let mut game = Game::new();
+fn play_game(difficulty: Difficulty) -> io::Result<u32> {
+    let mut game = Game::new(difficulty);
 
     'game: loop {
         // Очищает экран и переводит курсор в левый верхний угол
@@ -240,8 +242,12 @@ fn ask_restart() -> io::Result<bool> {
 }
 
 fn game_cycle() -> io::Result<u32> {
+    let Some(difficulty) = menu()? else {
+        return Ok(0);
+    };
+
     loop {
-        let game_score = play_game()?;
+        let game_score = play_game(difficulty)?;
 
         let has_restart_game = ask_restart()?;
 
