@@ -21,6 +21,12 @@ mod menu;
 mod snake;
 mod terminal;
 
+enum NextAction {
+    Restart,
+    Menu,
+    Quit,
+}
+
 struct Game {
     snake: Snake,
     food: Point,
@@ -133,6 +139,7 @@ fn play_game(difficulty: Difficulty) -> io::Result<u32> {
 
         let game_field = build_field(&game);
 
+        print!("\r\nУровень: {:?}", game.difficulty);
         print!("\r\nСчет: {}", game.score);
         print!("\r\n{}", game_field);
 
@@ -217,8 +224,8 @@ fn play_game(difficulty: Difficulty) -> io::Result<u32> {
     Ok(game.score)
 }
 
-fn ask_restart() -> io::Result<bool> {
-    print!("\r\nr - для перезапуска игры; Esc/q - для выхода из игры");
+fn ask_next_action() -> io::Result<NextAction> {
+    print!("\r\nr - заново, m - меню, Esc/q - выход");
 
     stdout().flush()?;
 
@@ -233,26 +240,30 @@ fn ask_restart() -> io::Result<bool> {
         }
 
         match key.code {
-            KeyCode::Char('r') => break Ok(true),
-            KeyCode::Char('q') => break Ok(false),
-            KeyCode::Esc => break Ok(false),
-            _ => (),
+            KeyCode::Char('r') => break Ok(NextAction::Restart),
+            KeyCode::Char('m') => break Ok(NextAction::Menu),
+            KeyCode::Char('q') | KeyCode::Esc => break Ok(NextAction::Quit),
+            _ => continue,
         }
     }
 }
 
 fn game_cycle() -> io::Result<u32> {
-    let Some(difficulty) = menu()? else {
-        return Ok(0);
-    };
-
+    let mut last_score = 0;
     loop {
-        let game_score = play_game(difficulty)?;
+        let Some(difficulty) = menu()? else {
+            return Ok(last_score);
+        };
 
-        let has_restart_game = ask_restart()?;
+        loop {
+            last_score = play_game(difficulty)?;
+            let action = ask_next_action()?;
 
-        if !has_restart_game {
-            break Ok(game_score);
+            match action {
+                NextAction::Restart => continue,
+                NextAction::Menu => break,
+                NextAction::Quit => return Ok(last_score),
+            }
         }
     }
 }
